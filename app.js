@@ -1,6 +1,6 @@
 /**
- * yoyaku_display - app.js
- * 既存のロジックとUI処理を100%維持
+ * yoyaku_display - app.js (JSONP対応版)
+ * 既存のロジックとUI処理を100%維持し、CORS制限を回避
  */
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbx1_sRPTOfl6wW0yVMN9emCAfcz2NfkXCh9mRXwwBPk5h65fY9bl69ShK5Tsoaklehufw/exec";
@@ -14,18 +14,38 @@ window.onload = function() {
 };
 
 /**
- * GASへの汎用通信関数 (google.script.run の代替)
+ * JSONP通信用関数
  */
-async function callGAS(action, params = {}) {
-  const query = new URLSearchParams({ action, ...params }).toString();
-  try {
-    const response = await fetch(`${GAS_URL}?${query}`);
-    if (!response.ok) throw new Error('Network response was not ok');
-    return await response.json();
-  } catch (error) {
-    console.error('GAS Connection Error:', error);
-    throw error;
-  }
+function callGAS(action, params = {}) {
+  return new Promise((resolve, reject) => {
+    const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
+    
+    // グローバルスコープにコールバック関数を登録
+    window[callbackName] = function(data) {
+      delete window[callbackName];
+      document.body.removeChild(script);
+      if (data && data.error) {
+        reject(data.error);
+      } else {
+        resolve(data);
+      }
+    };
+
+    const queryParams = new URLSearchParams({ 
+      action, 
+      callback: callbackName,
+      ...params 
+    }).toString();
+
+    const script = document.createElement('script');
+    script.src = `${GAS_URL}?${queryParams}`;
+    script.onerror = () => {
+      delete window[callbackName];
+      document.body.removeChild(script);
+      reject(new Error('GASとの通信に失敗しました(JSONP)'));
+    };
+    document.body.appendChild(script);
+  });
 }
 
 function switchArea(areaName) {
@@ -123,10 +143,8 @@ function renderData(data) {
   
   data.forEach(row => {
     const station = row[0], plate = row[1], model = row[2], getTime = String(row[3]), timelineStr = String(row[4] || "");
-    
     let baseDate = new Date(getTime.replace(/-/g, '/'));
     if (isNaN(baseDate.getTime())) baseDate = new Date();
-
     const card = document.createElement('div'); card.className = 'car-card';
     
     if (timelineStr.length !== 288 && timelineStr.length !== 576) {
