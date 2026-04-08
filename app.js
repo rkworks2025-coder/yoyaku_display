@@ -1,6 +1,6 @@
 /**
- * yoyaku_display - app.js (JSONP対応版)
- * 既存のロジックとUI処理を100%維持し、CORS制限を回避
+ * yoyaku_display - app.js (JSONP堅牢版)
+ * 既存のロジックとUI処理を100%維持
  */
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbx1_sRPTOfl6wW0yVMN9emCAfcz2NfkXCh9mRXwwBPk5h65fY9bl69ShK5Tsoaklehufw/exec";
@@ -14,16 +14,27 @@ window.onload = function() {
 };
 
 /**
- * JSONP通信用関数
+ * JSONP通信コアロジック
  */
 function callGAS(action, params = {}) {
   return new Promise((resolve, reject) => {
-    const callbackName = 'jsonp_callback_' + Math.round(100000 * Math.random());
+    const callbackName = 'jsonp_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
     
-    // グローバルスコープにコールバック関数を登録
-    window[callbackName] = function(data) {
+    // タイムアウト監視
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('通信タイムアウト: GASからの応答がありません'));
+    }, 30000);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
       delete window[callbackName];
-      document.body.removeChild(script);
+      const script = document.getElementById(callbackName);
+      if (script) script.remove();
+    };
+
+    window[callbackName] = function(data) {
+      cleanup();
       if (data && data.error) {
         reject(data.error);
       } else {
@@ -38,13 +49,15 @@ function callGAS(action, params = {}) {
     }).toString();
 
     const script = document.createElement('script');
-    script.src = `${GAS_URL}?${queryParams}`;
+    script.id = callbackName;
+    script.src = `${GAS_URL}${GAS_URL.includes('?') ? '&' : '?'}${queryParams}`;
+    
     script.onerror = () => {
-      delete window[callbackName];
-      document.body.removeChild(script);
-      reject(new Error('GASとの通信に失敗しました(JSONP)'));
+      cleanup();
+      reject(new Error('GASとの通信に失敗しました(JSONP)。デプロイ設定(全員)を確認してください。'));
     };
-    document.body.appendChild(script);
+
+    document.head.appendChild(script);
   });
 }
 
