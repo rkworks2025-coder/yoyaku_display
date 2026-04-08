@@ -1,6 +1,6 @@
 /**
- * yoyaku_display - app.js (JSONP堅牢版)
- * 既存のロジックとUI処理を100%維持
+ * yoyaku_display - app.js (キャッシュ表示・JSONP堅牢版)
+ * 既存のロジックを維持しつつ、localStorageによる即時表示を追加
  */
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbx1_sRPTOfl6wW0yVMN9emCAfcz2NfkXCh9mRXwwBPk5h65fY9bl69ShK5Tsoaklehufw/exec";
@@ -20,7 +20,6 @@ function callGAS(action, params = {}) {
   return new Promise((resolve, reject) => {
     const callbackName = 'jsonp_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
     
-    // タイムアウト監視
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error('通信タイムアウト: GASからの応答がありません'));
@@ -61,14 +60,44 @@ function callGAS(action, params = {}) {
   });
 }
 
+/**
+ * エリア切り替え（キャッシュ即時表示対応）
+ */
 function switchArea(areaName) {
   currentArea = areaName;
   document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.toggle('active', btn.textContent === areaName));
-  updateTime();
-  document.getElementById('car-list').innerHTML = '<div class="loading">読み込み中...</div>';
   
+  const cacheKey = `yoyaku_cache_${areaName}`;
+  const cachedRaw = localStorage.getItem(cacheKey);
+  
+  // 1. キャッシュがあれば即座に描画
+  if (cachedRaw) {
+    try {
+      const cachedData = JSON.parse(cachedRaw);
+      renderData(cachedData, true); // キャッシュであることを示すフラグを渡す
+    } catch (e) {
+      localStorage.removeItem(cacheKey);
+    }
+  } else {
+    // キャッシュがない場合のみ読み込み中を表示
+    document.getElementById('car-list').innerHTML = '<div class="loading">読み込み中...</div>';
+    document.getElementById('display-time').textContent = '--:-- 取得';
+    document.getElementById('car-count').textContent = '-- 台';
+  }
+
+  // 2. バックグラウンドで最新データを取得
   callGAS('getData', { areaName })
-    .then(renderData)
+    .then(newData => {
+      const newRaw = JSON.stringify(newData);
+      // 3. データに変化がある場合のみ再描画・保存
+      if (newRaw !== cachedRaw) {
+        localStorage.setItem(cacheKey, newRaw);
+        renderData(newData, false);
+      } else {
+        // 変化がない場合、取得時刻のみ更新（任意）
+        updateTime();
+      }
+    })
     .catch(renderError);
 }
 
@@ -144,7 +173,12 @@ function resetButton() {
   if(progressTimer) clearInterval(progressTimer);
 }
 
-function renderData(data) {
+/**
+ * データの描画
+ * @param {Array} data 取得データ
+ * @param {boolean} isCache キャッシュからの読み込みかどうか
+ */
+function renderData(data, isCache = false) {
   const listDiv = document.getElementById('car-list');
   listDiv.innerHTML = "";
   if (!data || data.length === 0 || data.error) {
@@ -194,6 +228,14 @@ function renderData(data) {
     card.innerHTML = `<div class="station-name">📍 ${station}</div><div class="car-name">${plate} <span style="font-size:0.8em; font-weight:normal;">/ ${model}</span></div><div class="scroll-wrapper"><div class="timeline-full-width" style="width: ${timelineWidth}px;">${labelsHtml}${timelineHtml}${gridsHtml}</div></div>`;
     listDiv.appendChild(card);
   });
+
+  // キャッシュ表示時は「取得」時間を更新しない（バックグラウンド更新完了時に更新される）
+  if (!isCache) {
+    updateTime();
+  } else {
+    const now = new Date();
+    document.getElementById('display-time').textContent = `(保存) ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  }
 }
 
 function renderError(e) { 
