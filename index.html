@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>予約状況モニター 144h Sniper</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div class="header">
+    <div class="top-row">
+      <div class="app-title">🚗 予約状況 <span style="font-size:0.8em; color:#888; font-weight:normal;">v20260327-Sniper</span></div>
+      <div class="update-controls">
+        <select id="area-select">
+          <option value="all">全エリア</option>
+          <option value="kanagawa">神奈川</option>
+          <option value="tama">多摩</option>
+          <option value="force_all">全件取得</option>
+          <option value="144h">全台予約(144h)</option>
+        </select>
+        <button id="update-btn" onclick="startPatrol()">↻ 更新開始</button>
+      </div>
+    </div>
+    <div class="nav-buttons">
+      <button class="nav-btn active" onclick="switchArea('大和')">大和</button>
+      <button class="nav-btn" onclick="switchArea('海老名')">海老名</button>
+      <button class="nav-btn" onclick="switchArea('多摩')">多摩</button>
+    </div>
+    <div class="meta-bar">
+      <span id="display-time">--:-- 取得</span>
+      <div class="legend-box">
+        <span><span class="dot dot-ok"></span>空</span>
+        <span><span class="dot dot-ng"></span>予約</span>
+        <span><span class="dot dot-st"></span>不可</span>
+      </div>
+      <span id="car-count">-- 台</span>
+    </div>
+  </div>
+
+  <div id="car-list"><div class="loading">読み込み中...</div></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
