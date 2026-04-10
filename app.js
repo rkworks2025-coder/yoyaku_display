@@ -1,6 +1,6 @@
 /**
- * yoyaku_display - app.js (バックグラウンド・サイレント同期版)
- * スクレイピング完了を検知して裏でキャッシュを完成させる
+ * yoyaku_display - app.js (v20260410-FETCH版)
+ * 通信方式をJSONPからFetch APIに変更し、Googleの検閲とキャッシュ問題を回避
  */
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbx1_sRPTOfl6wW0yVMN9emCAfcz2NfkXCh9mRXwwBPk5h65fY9bl69ShK5Tsoaklehufw/exec";
@@ -12,7 +12,6 @@ window.onload = function() {
   switchArea('大和');
   checkExistingPatrol();
   
-  // アプリに戻った瞬間に表示を最新化する（Visibility API）
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       const cachedRaw = localStorage.getItem(`yoyaku_cache_${currentArea}`);
@@ -24,33 +23,33 @@ window.onload = function() {
 };
 
 /**
- * JSONP通信コアロジック
+ * Fetch API通信コアロジック (JSONP廃止)
  */
-function callGAS(action, params = {}) {
-  return new Promise((resolve, reject) => {
-    const callbackName = 'jsonp_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
-    const timeout = setTimeout(() => { cleanup(); reject(new Error('タイムアウト')); }, 30000);
+async function callGAS(action, params = {}) {
+  // ブラウザとGoogle側のキャッシュを強制的にバイパスするための識別子
+  const cacheBuster = `_=${Date.now()}`;
+  const queryParams = new URLSearchParams({ action, ...params }).toString();
+  const url = `${GAS_URL}${GAS_URL.includes('?') ? '&' : '?'}${queryParams}&${cacheBuster}`;
 
-    const cleanup = () => {
-      clearTimeout(timeout);
-      delete window[callbackName];
-      const script = document.getElementById(callbackName);
-      if (script) script.remove();
-    };
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      mode: 'cors', // クロスドメイン通信を明示
+      cache: 'no-store'
+    });
 
-    window[callbackName] = function(data) {
-      cleanup();
-      if (data && data.error) reject(data.error);
-      else resolve(data);
-    };
+    if (!response.ok) {
+      throw new Error(`HTTPステータス: ${response.status}`);
+    }
 
-    const queryParams = new URLSearchParams({ action, callback: callbackName, ...params }).toString();
-    const script = document.createElement('script');
-    script.id = callbackName;
-    script.src = `${GAS_URL}${GAS_URL.includes('?') ? '&' : '?'}${queryParams}`;
-    script.onerror = () => { cleanup(); reject(new Error('通信エラー')); };
-    document.head.appendChild(script);
-  });
+    const data = await response.json();
+    if (data && data.error) throw new Error(data.error);
+    return data;
+  } catch (e) {
+    console.error("GAS通信詳細エラー:", e);
+    // 従来の呼び出し元との互換性を維持するためErrorオブジェクトを返す
+    throw e;
+  }
 }
 
 /**
@@ -71,7 +70,6 @@ function switchArea(areaName) {
     document.getElementById('car-list').innerHTML = '<div class="loading">読み込み中...</div>';
   }
 
-  // 常に最新データを取得しにいく（裏で行う）
   callGAS('getData', { areaName })
     .then(newData => {
       localStorage.setItem(cacheKey, JSON.stringify(newData));
@@ -114,7 +112,7 @@ function checkExistingPatrol() {
 }
 
 /**
- * 進捗監視（ここがバックグラウンド動作の肝）
+ * 進捗監視
  */
 function startWatchingProgress() {
   const btn = document.getElementById('update-btn');
@@ -128,9 +126,7 @@ function startWatchingProgress() {
           btn.style.setProperty('--progress-width', `${progress}%`);
           btn.textContent = `巡回中... (${data.current}/${data.total})`;
           
-          // 完了直前（または完了）を検知
           if (data.current >= data.total - 1) {
-            // ★サイレント・同期：完了画面にする前に裏でデータを取得してキャッシュに叩き込む
             silentFinalSync();
           }
         } else if (data.isEmpty) { 
@@ -140,9 +136,6 @@ function startWatchingProgress() {
   }, 15000);
 }
 
-/**
- * スクレイピング完了時のサイレント同期
- */
 async function silentFinalSync() {
   if(progressTimer) clearInterval(progressTimer);
   
@@ -150,14 +143,8 @@ async function silentFinalSync() {
   btn.textContent = '処理中...';
 
   try {
-    // 現在のエリアのデータを裏で取得
     const newData = await callGAS('getData', { areaName: currentArea });
     localStorage.setItem(`yoyaku_cache_${currentArea}`, JSON.stringify(newData));
-    
-    // 他の主要エリアもついでに裏で更新しておく（任意：リソースと相談）
-    // const areas = ['大和', '海老名', '多摩'];
-    // for(const a of areas) { ... }
-
     btn.textContent = '✅ 完了！';
     renderData(newData, false);
   } catch (e) {
@@ -165,13 +152,10 @@ async function silentFinalSync() {
     btn.textContent = '✅ 完了(同期失敗)';
   }
   
-  // 3秒後にボタンをリセット（リロードはさせない。データは既に入れ替わっているため）
   setTimeout(() => resetButton(), 3000);
 }
 
-function patrolFinished() {
-  // silentFinalSync 内で処理するため、この関数は直接呼ばないか削除
-}
+function patrolFinished() {}
 
 function resetButton() {
   const btn = document.getElementById('update-btn');
