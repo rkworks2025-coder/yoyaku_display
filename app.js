@@ -1,86 +1,89 @@
 /**
- * yoyaku_display - app.js (v20260410-FETCH版)
- * 通信方式をJSONPからFetch APIに変更し、Googleの検閲とキャッシュ問題を回避
+ * yoyaku_display - app.js (v20260429-エリア最優先・スマート同期版)
  */
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbx1_sRPTOfl6wW0yVMN9emCAfcz2NfkXCh9mRXwwBPk5h65fY9bl69ShK5Tsoaklehufw/exec";
 
-let currentArea = '大和';
+let currentArea = localStorage.getItem('selected_area') || '大和';
+let lastTimestamp = localStorage.getItem('last_update_ts') || 0;
 let progressTimer;
 
 window.onload = function() { 
-  switchArea('大和');
+  // 保存されていたエリアで起動
+  switchArea(currentArea, true);
   checkExistingPatrol();
   
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
-      const cachedRaw = localStorage.getItem(`yoyaku_cache_${currentArea}`);
-      if (cachedRaw) {
-        renderData(JSON.parse(cachedRaw), true);
-      }
+      // 復帰時に更新があるかチェック
+      smartRefresh();
     }
   });
 };
 
 /**
- * Fetch API通信コアロジック (JSONP廃止)
+ * エリア切り替え
+ * @param {boolean} isInitial 起動時の呼び出しかどうか
  */
-async function callGAS(action, params = {}) {
-  // ブラウザとGoogle側のキャッシュを強制的にバイパスするための識別子
-  const cacheBuster = `_=${Date.now()}`;
-  const queryParams = new URLSearchParams({ action, ...params }).toString();
-  const url = `${GAS_URL}${GAS_URL.includes('?') ? '&' : '?'}${queryParams}&${cacheBuster}`;
-
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      mode: 'cors', // クロスドメイン通信を明示
-      cache: 'no-store'
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTPステータス: ${response.status}`);
-    }
-
-    const data = await response.json();
-    if (data && data.error) throw new Error(data.error);
-    return data;
-  } catch (e) {
-    console.error("GAS通信詳細エラー:", e);
-    // 従来の呼び出し元との互換性を維持するためErrorオブジェクトを返す
-    throw e;
-  }
-}
-
-/**
- * エリア切り替え（キャッシュ即時表示）
- */
-function switchArea(areaName) {
+function switchArea(areaName, isInitial = false) {
   currentArea = areaName;
+  localStorage.setItem('selected_area', areaName);
+  
   document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.toggle('active', btn.textContent === areaName));
   
   const cacheKey = `yoyaku_cache_${areaName}`;
   const cachedRaw = localStorage.getItem(cacheKey);
   
+  // まずキャッシュを表示（起動時以外、またはキャッシュがある場合）
   if (cachedRaw) {
-    try {
-      renderData(JSON.parse(cachedRaw), true);
-    } catch (e) { localStorage.removeItem(cacheKey); }
+    renderData(JSON.parse(cachedRaw), true);
   } else {
     document.getElementById('car-list').innerHTML = '<div class="loading">読み込み中...</div>';
   }
 
-  callGAS('getData', { areaName })
-    .then(newData => {
-      localStorage.setItem(cacheKey, JSON.stringify(newData));
-      renderData(newData, false);
-    })
-    .catch(renderError);
+  // 起動時または更新が必要な場合のみGASと通信
+  if (isInitial) {
+    smartRefresh();
+  } else {
+    fetchLatestData();
+  }
 }
 
 /**
- * 巡回開始
+ * 更新時刻をチェックし、必要ならリロード
  */
+async function smartRefresh() {
+  try {
+    const status = await callGAS('getProgressStatus');
+    // SystemStatus D1 の時刻が保存されているものより新しければ読み込む
+    if (String(status.timestamp) !== String(lastTimestamp)) {
+      await fetchLatestData();
+      lastTimestamp = status.timestamp;
+      localStorage.setItem('last_update_ts', lastTimestamp);
+    }
+  } catch (e) { console.error("更新チェック失敗:", e); }
+}
+
+async function fetchLatestData() {
+  try {
+    const newData = await callGAS('getData', { areaName: currentArea });
+    localStorage.setItem(`yoyaku_cache_${currentArea}`, JSON.stringify(newData));
+    renderData(newData, false);
+  } catch (e) { renderError(e); }
+}
+
+async function callGAS(action, params = {}) {
+  const cacheBuster = `_=${Date.now()}`;
+  const queryParams = new URLSearchParams({ action, ...params }).toString();
+  const url = `${GAS_URL}${GAS_URL.includes('?') ? '&' : '?'}${queryParams}&${cacheBuster}`;
+
+  const response = await fetch(url, { method: 'GET', mode: 'cors', cache: 'no-store' });
+  if (!response.ok) throw new Error(`HTTP: ${response.status}`);
+  const data = await response.json();
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+
 function startPatrol() {
   const btn = document.getElementById('update-btn');
   const select = document.getElementById('area-select');
@@ -89,35 +92,15 @@ function startPatrol() {
   
   callGAS('triggerGitHubAction', { targetArea: select.value })
     .then(res => {
-      if (res === 'OK') { 
-        btn.textContent = '巡回中...'; 
-        startWatchingProgress(); 
-      } else { 
-        alert('エラー: ' + res); 
-        resetButton(); 
-      }
-    })
-    .catch(e => { alert('通信エラー: ' + e); resetButton(); });
+      if (res === 'OK') { startWatchingProgress(); } 
+      else { alert('エラー: ' + res); resetButton(); }
+    }).catch(e => { alert('通信エラー: ' + e); resetButton(); });
 }
 
-function checkExistingPatrol() {
-  callGAS('getProgressStatus')
-    .then(data => {
-      if (data.total > 0 && data.current < data.total) {
-        document.getElementById('update-btn').disabled = true;
-        document.getElementById('area-select').disabled = true;
-        startWatchingProgress();
-      }
-    }).catch(console.error);
-}
-
-/**
- * 進捗監視
- */
 function startWatchingProgress() {
-  const btn = document.getElementById('update-btn');
   if(progressTimer) clearInterval(progressTimer);
-  
+  const btn = document.getElementById('update-btn');
+
   progressTimer = setInterval(() => {
     callGAS('getProgressStatus')
       .then(data => {
@@ -126,69 +109,66 @@ function startWatchingProgress() {
           btn.style.setProperty('--progress-width', `${progress}%`);
           btn.textContent = `巡回中... (${data.current}/${data.total})`;
           
-          if (data.current >= data.total - 1) {
-            silentFinalSync();
+          // 完了検知
+          if (data.current >= data.total - 1 || data.isEmpty) {
+            finishPatrolSequence(data.timestamp);
           }
-        } else if (data.isEmpty) { 
-          silentFinalSync();
         }
       }).catch(console.error);
-  }, 15000);
+  }, 10000);
 }
 
-async function silentFinalSync() {
+async function finishPatrolSequence(newTs) {
   if(progressTimer) clearInterval(progressTimer);
-  
   const btn = document.getElementById('update-btn');
-  btn.textContent = '処理中...';
+  btn.textContent = '同期中...';
 
-  try {
-    const newData = await callGAS('getData', { areaName: currentArea });
-    localStorage.setItem(`yoyaku_cache_${currentArea}`, JSON.stringify(newData));
-    btn.textContent = '✅ 完了！';
-    renderData(newData, false);
-  } catch (e) {
-    console.error("最終同期失敗:", e);
-    btn.textContent = '✅ 完了(同期失敗)';
-  }
+  lastTimestamp = newTs;
+  localStorage.setItem('last_update_ts', lastTimestamp);
   
+  await fetchLatestData();
+  btn.textContent = '✅ 完了';
   setTimeout(() => resetButton(), 3000);
 }
 
-function patrolFinished() {}
+function checkExistingPatrol() {
+  callGAS('getProgressStatus').then(data => {
+    if (data.total > 0 && data.current < data.total) {
+      document.getElementById('update-btn').disabled = true;
+      startWatchingProgress();
+    }
+  }).catch(console.error);
+}
 
 function resetButton() {
   const btn = document.getElementById('update-btn');
-  btn.disabled = false; 
-  document.getElementById('area-select').disabled = false;
-  btn.textContent = '↻ 更新開始'; 
-  btn.style.setProperty('--progress-width', '0%');
-  if(progressTimer) clearInterval(progressTimer);
+  btn.disabled = false; document.getElementById('area-select').disabled = false;
+  btn.textContent = '↻ 更新開始'; btn.style.setProperty('--progress-width', '0%');
 }
 
 function renderData(data, isCache = false) {
   const listDiv = document.getElementById('car-list');
   listDiv.innerHTML = "";
-  if (!data || data.length === 0 || data.error) {
-    listDiv.innerHTML = `<div class="loading">${data?.error || "データなし"}</div>`;
+  if (!data || data.length === 0) {
+    listDiv.innerHTML = '<div class="loading">車両なし</div>';
     document.getElementById('car-count').textContent = '0 台';
     return;
   }
   document.getElementById('car-count').textContent = data.length + ' 台';
   
   data.forEach(row => {
-    const station = row[0], plate = row[1], model = row[2], getTime = String(row[3]), timelineStr = String(row[4] || "");
-    let baseDate = new Date(getTime.replace(/-/g, '/'));
-    if (isNaN(baseDate.getTime())) baseDate = new Date();
+    const [station, plate, model, getTime, timelineStr] = row;
     const card = document.createElement('div'); card.className = 'car-card';
     
-    if (timelineStr.length !== 288 && timelineStr.length !== 576) {
+    if (!timelineStr || (timelineStr.length !== 288 && timelineStr.length !== 576)) {
       card.innerHTML = `<div class="station-name">📍 ${station}</div><div class="car-name">${plate}</div><div class="error-msg">データ不整合</div>`;
       listDiv.appendChild(card); return;
     }
 
     const totalHours = timelineStr.length / 4; 
     const timelineWidth = totalHours === 144 ? 3200 : 1600;
+    let baseDate = new Date(String(getTime).replace(/-/g, '/'));
+    if (isNaN(baseDate.getTime())) baseDate = new Date();
 
     let timelineHtml = '<div class="timeline-container">';
     for (let char of timelineStr) {
@@ -197,7 +177,7 @@ function renderData(data, isCache = false) {
     }
     timelineHtml += '</div>';
 
-    let labelsHtml = '', gridsHtml = '';
+    let labelsHtml = '';
     for (let h = 0; h < totalHours; h++) { 
       const leftPos = (h / totalHours) * 100;
       const slotDate = new Date(baseDate.getTime() + h * 60 * 60 * 1000);
@@ -205,26 +185,20 @@ function renderData(data, isCache = false) {
       if (currentHour % 2 === 0) {
         labelsHtml += `<div class="ruler-label" style="left: ${leftPos}%;">${currentHour}</div>`;
         if (currentHour === 0) {
-          const mm = slotDate.getMonth() + 1, dd = slotDate.getDate();
-          labelsHtml += `<div class="ruler-label" style="left: ${leftPos}%; margin-left: 6px; color: #ffcc00; z-index: 10;">${mm}/${dd}</div>`;
+          labelsHtml += `<div class="ruler-label" style="left: ${leftPos}%; margin-left: 6px; color: #ffcc00; top: 11px;">${slotDate.getMonth()+1}/${slotDate.getDate()}</div>`;
         }
       }
-      gridsHtml += `<div class="grid-line" style="left: ${leftPos}%;"></div>`;
     }
-    card.innerHTML = `<div class="station-name">📍 ${station}</div><div class="car-name">${plate} <span style="font-size:0.8em; font-weight:normal;">/ ${model}</span></div><div class="scroll-wrapper"><div class="timeline-full-width" style="width: ${timelineWidth}px;">${labelsHtml}${timelineHtml}${gridsHtml}</div></div>`;
+    card.innerHTML = `<div class="station-name">📍 ${station}</div><div class="car-name">${plate} <span style="font-size:0.8em; font-weight:normal;">/ ${model}</span></div><div class="scroll-wrapper"><div class="timeline-full-width" style="width: ${timelineWidth}px;">${labelsHtml}${timelineHtml}</div></div>`;
     listDiv.appendChild(card);
   });
+  updateTimeDisplay(isCache);
+}
 
-  if (!isCache) updateTime();
-  else {
-    const now = new Date();
-    document.getElementById('display-time').textContent = `(保存) ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  }
+function updateTimeDisplay(isCache) {
+  const now = new Date();
+  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  document.getElementById('display-time').textContent = isCache ? `(保存) ${timeStr}` : `${timeStr} 取得`;
 }
 
 function renderError(e) { document.getElementById('car-list').innerHTML = `<div class="loading">エラー: ${e}</div>`; }
-
-function updateTime() {
-  const now = new Date();
-  document.getElementById('display-time').textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} 取得`;
-}
