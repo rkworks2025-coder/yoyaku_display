@@ -3,7 +3,7 @@
  * 通信方式をJSONPからFetch APIに変更し、Googleの検閲とキャッシュ問題を回避
  */
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycby_h_EtlHsp2Tx_5RZdaY9RBimo4D6ASJrHLwwo1pOGtrHS0kjJxPGL0jfA9Sd5S8Ts/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbwpNRM_753x0gG5sl5_LTwxn5afUUQqezpmPb874-Stsl5aVUJBLTBk70nW5RE_mdU0/exec";
 
 let currentArea = '多摩';
 let progressTimer;
