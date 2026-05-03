@@ -5,11 +5,11 @@
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycby_h_EtlHsp2Tx_5RZdaY9RBimo4D6ASJrHLwwo1pOGtrHS0kjJxPGL0jfA9Sd5S8Ts/exec";
 
-let currentArea = '大和';
+let currentArea = '多摩';
 let progressTimer;
 
 window.onload = function() { 
-  switchArea('大和');
+  switchArea('多摩');
   checkExistingPatrol();
   
   document.addEventListener("visibilitychange", () => {
